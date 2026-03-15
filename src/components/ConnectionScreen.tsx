@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { ConnectionConfig } from '../types'
+import appIcon from '../assets/app-icon.png'
 
 interface Props {
   onConnected: (username: string) => void
@@ -262,7 +263,7 @@ export default function ConnectionScreen({ onConnected }: Props) {
         {/* App Icon */}
         <div className="text-center mb-8">
           <img
-            src="/app-icon.png"
+            src={appIcon}
             alt="Secretary"
             className="w-20 h-20 rounded-2xl shadow-lg mx-auto mb-4 object-cover"
           />

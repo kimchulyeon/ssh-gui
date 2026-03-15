@@ -8,6 +8,7 @@ import ReceiveScreen from './components/ReceiveScreen'
 import StatusScreen from './components/StatusScreen'
 import HistoryScreen, { addHistory } from './components/HistoryScreen'
 import ToastContainer, { showToast } from './components/ui/Toast'
+import appIcon from './assets/app-icon.png'
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('connection')
@@ -166,7 +167,7 @@ export default function App() {
       <main className="flex-1 overflow-hidden">
         {autoConnecting && (
           <div className="h-full flex flex-col items-center justify-center gap-4">
-            <img src="/app-icon.png" alt="Secretary" className="w-16 h-16 rounded-2xl shadow-lg object-cover" />
+            <img src={appIcon} alt="Secretary" className="w-16 h-16 rounded-2xl shadow-lg object-cover" />
             <div className="text-sm text-mac-muted">Connecting...</div>
             <div className="w-32 h-1 bg-mac-border rounded-full overflow-hidden">
               <div className="h-full bg-mac-accent rounded-full animate-pulse" style={{ width: '60%' }} />
