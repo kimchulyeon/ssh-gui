@@ -1,6 +1,6 @@
 {
   "name": "secretary",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Mac Mini File Manager - SSH/SFTP GUI",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -42,7 +42,13 @@
       "icon": "build/icon.icns",
       "category": "public.app-category.utilities",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -51,7 +57,9 @@
     },
     "win": {
       "icon": "build/icon.png",
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "nsis": {
       "oneClick": false,
