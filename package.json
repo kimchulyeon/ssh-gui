@@ -5,7 +5,10 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && electron-builder",
+    "build": "vite build",
+    "build:mac": "vite build && electron-builder --mac",
+    "build:win": "vite build && electron-builder --win",
+    "build:all": "vite build && electron-builder --mac --win",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -32,15 +35,41 @@
   "build": {
     "appId": "com.secretary.app",
     "productName": "Secretary",
+    "directories": {
+      "output": "release"
+    },
     "mac": {
       "icon": "build/icon.icns",
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "dmg": {
+      "sign": false
     },
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
       "docs/**/*",
       "build/**/*"
-    ]
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "kimchulyeon",
+      "repo": "ssh-gui"
+    }
   }
 }
