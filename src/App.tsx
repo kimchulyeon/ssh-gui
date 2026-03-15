@@ -23,7 +23,6 @@ export default function App() {
     return cleanup
   }, [])
 
-  // Auto-reconnect on startup using saved settings
   useEffect(() => {
     (async () => {
       try {
