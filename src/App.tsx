@@ -28,7 +28,8 @@ export default function App() {
     (async () => {
       try {
         const saved = await window.electronAPI.settings.get('connection')
-        if (!saved?.host || !saved?.username) {
+        // Only auto-connect with SSH key auth (password is not saved)
+        if (!saved?.host || !saved?.username || saved?.authType === 'password') {
           setAutoConnecting(false)
           return
         }
@@ -37,9 +38,11 @@ export default function App() {
           setConnected(true)
           setRemoteUser(saved.username)
           setScreen('home')
+        } else {
+          setScreen('connection')
         }
       } catch {
-        // auto-connect failed, show connection screen
+        setScreen('connection')
       } finally {
         setAutoConnecting(false)
       }
