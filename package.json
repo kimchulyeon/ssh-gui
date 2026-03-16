@@ -1,6 +1,6 @@
 {
   "name": "secretary",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Mac Mini File Manager - SSH/SFTP GUI",
   "main": "dist-electron/main.js",
   "scripts": {
