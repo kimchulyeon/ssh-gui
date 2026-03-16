@@ -6,11 +6,27 @@ import { SSHConnection } from './ssh/connection'
 import { SFTPManager } from './ssh/sftp'
 
 let mainWindow: BrowserWindow | null = null
-let sshConnection: SSHConnection | null = null
-let sftpManager: SFTPManager | null = null
 
 const DIST = path.join(__dirname, '../dist')
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
+
+// --- Multi-connection management ---
+
+interface ManagedConnection {
+  ssh: SSHConnection
+  sftp: SFTPManager
+  config: any
+}
+
+const connections = new Map<string, ManagedConnection>()
+
+function getConnection(connectionId: string): ManagedConnection {
+  const conn = connections.get(connectionId)
+  if (!conn) throw new Error(`No connection: ${connectionId}`)
+  return conn
+}
+
+// --- Window ---
 
 function createWindow() {
   const iconPath = path.join(__dirname, '..', 'build', 'icon.icns')
@@ -45,15 +61,16 @@ function createWindow() {
 app.whenReady().then(createWindow)
 
 app.on('window-all-closed', () => {
-  sshConnection?.disconnect()
+  for (const [, conn] of connections) {
+    conn.ssh.disconnect()
+  }
+  connections.clear()
   app.quit()
 })
 
 // --- SSH Connection IPC ---
 
-let lastConfig: any = null
-
-ipcMain.handle('ssh:connect', async (_event, config: {
+ipcMain.handle('ssh:connect', async (_event, connectionId: string, config: {
   host: string
   port: number
   username: string
@@ -62,39 +79,58 @@ ipcMain.handle('ssh:connect', async (_event, config: {
   password?: string
 }) => {
   try {
-    sshConnection?.disconnect()
-    sshConnection = new SSHConnection()
+    // Duplicate guard
+    for (const [existingId, conn] of connections) {
+      if (existingId !== connectionId && conn.ssh.isConnected() &&
+          conn.config.host === config.host && conn.config.username === config.username) {
+        return { success: false, error: `Already connected to ${config.host} as ${config.username}` }
+      }
+    }
 
-    // Listen for unexpected disconnects
-    sshConnection.getClient().on('close', () => {
-      if (lastConfig) {
-        mainWindow?.webContents.send('ssh:disconnected')
+    // Disconnect existing if reconnecting same id
+    const existing = connections.get(connectionId)
+    if (existing) {
+      existing.ssh.disconnect()
+      connections.delete(connectionId)
+    }
+
+    const ssh = new SSHConnection()
+
+    ssh.getClient().on('close', () => {
+      if (connections.has(connectionId)) {
+        mainWindow?.webContents.send('ssh:disconnected', connectionId)
       }
     })
 
-    await sshConnection.connect(config)
-    sftpManager = new SFTPManager(sshConnection)
-    await sftpManager.init()
-    lastConfig = config
+    await ssh.connect(config)
+    const sftp = new SFTPManager(ssh)
+    await sftp.init()
+
+    connections.set(connectionId, { ssh, sftp, config })
     return { success: true }
   } catch (err: any) {
     return { success: false, error: err.message }
   }
 })
 
-ipcMain.handle('ssh:reconnect', async () => {
-  if (!lastConfig) return { success: false, error: 'No saved connection' }
+ipcMain.handle('ssh:reconnect', async (_event, connectionId: string) => {
+  const conn = connections.get(connectionId)
+  if (!conn) return { success: false, error: 'No saved connection' }
+  const config = conn.config
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      sshConnection?.disconnect()
-      sshConnection = new SSHConnection()
-      sshConnection.getClient().on('close', () => {
-        mainWindow?.webContents.send('ssh:disconnected')
+      conn.ssh.disconnect()
+      const ssh = new SSHConnection()
+      ssh.getClient().on('close', () => {
+        if (connections.has(connectionId)) {
+          mainWindow?.webContents.send('ssh:disconnected', connectionId)
+        }
       })
-      await sshConnection.connect(lastConfig)
-      sftpManager = new SFTPManager(sshConnection)
-      await sftpManager.init()
+      await ssh.connect(config)
+      const sftp = new SFTPManager(ssh)
+      await sftp.init()
+      connections.set(connectionId, { ssh, sftp, config })
       return { success: true, attempt }
     } catch (err: any) {
       if (attempt === 3) return { success: false, error: err.message }
@@ -104,65 +140,58 @@ ipcMain.handle('ssh:reconnect', async () => {
   return { success: false, error: 'Reconnect failed' }
 })
 
-ipcMain.handle('ssh:disconnect', async () => {
-  lastConfig = null
-  sftpManager = null
-  sshConnection?.disconnect()
-  sshConnection = null
+ipcMain.handle('ssh:disconnect', async (_event, connectionId: string) => {
+  const conn = connections.get(connectionId)
+  if (conn) {
+    conn.ssh.disconnect()
+    connections.delete(connectionId)
+  }
   return { success: true }
 })
 
-ipcMain.handle('ssh:status', async () => {
-  return { connected: sshConnection?.isConnected() ?? false }
+ipcMain.handle('ssh:status', async (_event, connectionId: string) => {
+  const conn = connections.get(connectionId)
+  return { connected: conn?.ssh.isConnected() ?? false }
 })
 
-ipcMain.handle('ssh:exec', async (_event, command: string) => {
-  if (!sshConnection) throw new Error('Not connected')
-  return sshConnection.exec(command)
+ipcMain.handle('ssh:exec', async (_event, connectionId: string, command: string) => {
+  return getConnection(connectionId).ssh.exec(command)
 })
 
 // --- SFTP IPC ---
 
-ipcMain.handle('sftp:readdir', async (_event, remotePath: string) => {
-  if (!sftpManager) throw new Error('Not connected')
-  return sftpManager.readdir(remotePath)
+ipcMain.handle('sftp:readdir', async (_event, connectionId: string, remotePath: string) => {
+  return getConnection(connectionId).sftp.readdir(remotePath)
 })
 
-ipcMain.handle('sftp:mkdir', async (_event, remotePath: string) => {
-  if (!sftpManager) throw new Error('Not connected')
-  return sftpManager.mkdir(remotePath)
+ipcMain.handle('sftp:mkdir', async (_event, connectionId: string, remotePath: string) => {
+  return getConnection(connectionId).sftp.mkdir(remotePath)
 })
 
-ipcMain.handle('sftp:rename', async (_event, oldPath: string, newPath: string) => {
-  if (!sftpManager) throw new Error('Not connected')
-  return sftpManager.rename(oldPath, newPath)
+ipcMain.handle('sftp:rename', async (_event, connectionId: string, oldPath: string, newPath: string) => {
+  return getConnection(connectionId).sftp.rename(oldPath, newPath)
 })
 
-ipcMain.handle('sftp:delete', async (_event, remotePath: string, isDir: boolean) => {
-  if (!sftpManager) throw new Error('Not connected')
-  if (isDir) {
-    return sftpManager.rmdir(remotePath)
-  }
-  return sftpManager.unlink(remotePath)
+ipcMain.handle('sftp:delete', async (_event, connectionId: string, remotePath: string, isDir: boolean) => {
+  const sftp = getConnection(connectionId).sftp
+  if (isDir) return sftp.rmdir(remotePath)
+  return sftp.unlink(remotePath)
 })
 
-ipcMain.handle('sftp:upload', async (event, localPath: string, remotePath: string) => {
-  if (!sftpManager) throw new Error('Not connected')
-  return sftpManager.upload(localPath, remotePath, (progress) => {
-    mainWindow?.webContents.send('sftp:progress', progress)
+ipcMain.handle('sftp:upload', async (_event, connectionId: string, localPath: string, remotePath: string) => {
+  return getConnection(connectionId).sftp.upload(localPath, remotePath, (progress) => {
+    mainWindow?.webContents.send('sftp:progress', { connectionId, ...progress })
   })
 })
 
-ipcMain.handle('sftp:download', async (event, remotePath: string, localPath: string) => {
-  if (!sftpManager) throw new Error('Not connected')
-  return sftpManager.download(remotePath, localPath, (progress) => {
-    mainWindow?.webContents.send('sftp:progress', progress)
+ipcMain.handle('sftp:download', async (_event, connectionId: string, remotePath: string, localPath: string) => {
+  return getConnection(connectionId).sftp.download(remotePath, localPath, (progress) => {
+    mainWindow?.webContents.send('sftp:progress', { connectionId, ...progress })
   })
 })
 
-ipcMain.handle('sftp:stat', async (_event, remotePath: string) => {
-  if (!sftpManager) throw new Error('Not connected')
-  return sftpManager.stat(remotePath)
+ipcMain.handle('sftp:stat', async (_event, connectionId: string, remotePath: string) => {
+  return getConnection(connectionId).sftp.stat(remotePath)
 })
 
 // --- Dialog IPC ---
@@ -194,9 +223,7 @@ ipcMain.handle('dialog:saveDirectory', async () => {
 
 // --- App Files IPC ---
 
-const APP_ROOT = VITE_DEV_SERVER_URL
-  ? path.join(__dirname, '..')
-  : path.join(__dirname, '..')
+const APP_ROOT = path.join(__dirname, '..')
 
 ipcMain.handle('app:saveDocFile', async (_event, filename: string) => {
   if (!mainWindow) return { success: false }

@@ -10,7 +10,11 @@ interface DiskInfo {
   mounted: string
 }
 
-export default function StatusScreen() {
+interface Props {
+  connectionId: string
+}
+
+export default function StatusScreen({ connectionId }: Props) {
   const [connected, setConnected] = useState(true)
   const [disks, setDisks] = useState<DiskInfo[]>([])
   const [uptime, setUptime] = useState('')
@@ -21,14 +25,14 @@ export default function StatusScreen() {
   const fetchStatus = useCallback(async () => {
     setLoading(true)
     try {
-      const status = await window.electronAPI.ssh.status()
+      const status = await window.electronAPI.ssh.status(connectionId)
       setConnected(status.connected)
 
       if (!status.connected) return
 
       // Disk usage — macOS df -h has 9 columns:
       // Filesystem Size Used Avail Capacity iused ifree %iused Mounted
-      const dfOutput = await window.electronAPI.ssh.exec('df -h')
+      const dfOutput = await window.electronAPI.ssh.exec(connectionId,'df -h')
       const lines = dfOutput.trim().split('\n').slice(1)
       const parsed: DiskInfo[] = lines
         .map((line) => {
@@ -69,15 +73,15 @@ export default function StatusScreen() {
       setDisks(parsed)
 
       // Hostname
-      const hostnameOutput = await window.electronAPI.ssh.exec('hostname')
+      const hostnameOutput = await window.electronAPI.ssh.exec(connectionId,'hostname')
       setHostname(hostnameOutput.trim())
 
       // Uptime
-      const uptimeOutput = await window.electronAPI.ssh.exec('uptime')
+      const uptimeOutput = await window.electronAPI.ssh.exec(connectionId,'uptime')
       setUptime(uptimeOutput.trim())
 
       // OS version
-      const osOutput = await window.electronAPI.ssh.exec('sw_vers -productVersion 2>/dev/null || echo "N/A"')
+      const osOutput = await window.electronAPI.ssh.exec(connectionId,'sw_vers -productVersion 2>/dev/null || echo "N/A"')
       setOsVersion(osOutput.trim())
     } catch (err: any) {
       showToast('error', `Status fetch failed: ${err.message}`)

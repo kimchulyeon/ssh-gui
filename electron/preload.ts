@@ -3,29 +3,31 @@ import { contextBridge, ipcRenderer } from 'electron'
 contextBridge.exposeInMainWorld('electronAPI', {
   // SSH
   ssh: {
-    connect: (config: any) => ipcRenderer.invoke('ssh:connect', config),
-    disconnect: () => ipcRenderer.invoke('ssh:disconnect'),
-    reconnect: () => ipcRenderer.invoke('ssh:reconnect'),
-    status: () => ipcRenderer.invoke('ssh:status'),
-    exec: (command: string) => ipcRenderer.invoke('ssh:exec', command),
-    onDisconnected: (callback: () => void) => {
-      ipcRenderer.on('ssh:disconnected', () => callback())
-      return () => ipcRenderer.removeAllListeners('ssh:disconnected')
+    connect: (connectionId: string, config: any) => ipcRenderer.invoke('ssh:connect', connectionId, config),
+    disconnect: (connectionId: string) => ipcRenderer.invoke('ssh:disconnect', connectionId),
+    reconnect: (connectionId: string) => ipcRenderer.invoke('ssh:reconnect', connectionId),
+    status: (connectionId: string) => ipcRenderer.invoke('ssh:status', connectionId),
+    exec: (connectionId: string, command: string) => ipcRenderer.invoke('ssh:exec', connectionId, command),
+    onDisconnected: (callback: (connectionId: string) => void) => {
+      const handler = (_event: any, connectionId: string) => callback(connectionId)
+      ipcRenderer.on('ssh:disconnected', handler)
+      return () => ipcRenderer.removeListener('ssh:disconnected', handler)
     },
   },
 
   // SFTP
   sftp: {
-    readdir: (path: string) => ipcRenderer.invoke('sftp:readdir', path),
-    mkdir: (path: string) => ipcRenderer.invoke('sftp:mkdir', path),
-    rename: (oldPath: string, newPath: string) => ipcRenderer.invoke('sftp:rename', oldPath, newPath),
-    delete: (path: string, isDir: boolean) => ipcRenderer.invoke('sftp:delete', path, isDir),
-    upload: (localPath: string, remotePath: string) => ipcRenderer.invoke('sftp:upload', localPath, remotePath),
-    download: (remotePath: string, localPath: string) => ipcRenderer.invoke('sftp:download', remotePath, localPath),
-    stat: (path: string) => ipcRenderer.invoke('sftp:stat', path),
+    readdir: (connectionId: string, path: string) => ipcRenderer.invoke('sftp:readdir', connectionId, path),
+    mkdir: (connectionId: string, path: string) => ipcRenderer.invoke('sftp:mkdir', connectionId, path),
+    rename: (connectionId: string, oldPath: string, newPath: string) => ipcRenderer.invoke('sftp:rename', connectionId, oldPath, newPath),
+    delete: (connectionId: string, path: string, isDir: boolean) => ipcRenderer.invoke('sftp:delete', connectionId, path, isDir),
+    upload: (connectionId: string, localPath: string, remotePath: string) => ipcRenderer.invoke('sftp:upload', connectionId, localPath, remotePath),
+    download: (connectionId: string, remotePath: string, localPath: string) => ipcRenderer.invoke('sftp:download', connectionId, remotePath, localPath),
+    stat: (connectionId: string, path: string) => ipcRenderer.invoke('sftp:stat', connectionId, path),
     onProgress: (callback: (progress: any) => void) => {
-      ipcRenderer.on('sftp:progress', (_event, progress) => callback(progress))
-      return () => ipcRenderer.removeAllListeners('sftp:progress')
+      const handler = (_event: any, progress: any) => callback(progress)
+      ipcRenderer.on('sftp:progress', handler)
+      return () => ipcRenderer.removeListener('sftp:progress', handler)
     },
   },
 

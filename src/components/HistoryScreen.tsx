@@ -7,6 +7,7 @@ export interface TransferRecord {
   direction: 'upload' | 'download'
   success: boolean
   error?: string
+  connectionName?: string
 }
 
 let historyId = 0
@@ -89,6 +90,7 @@ export default function HistoryScreen() {
                 <div className="text-sm truncate">{r.filename}</div>
                 <div className="text-[10px] text-mac-muted">
                   {r.direction === 'upload' ? 'Sent' : 'Received'}
+                  {r.connectionName && <span className="text-mac-accent ml-1">({r.connectionName})</span>}
                   {!r.success && r.error && <span className="text-mac-danger ml-1">— {r.error}</span>}
                 </div>
               </div>

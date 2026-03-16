@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
-import type { Screen, ConnectionConfig, TransferProgress } from './types'
-import ConnectionScreen from './components/ConnectionScreen'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import type { Screen, ConnectionProfile, TransferProgress } from './types'
+import ConnectionListScreen from './components/ConnectionListScreen'
 import HomeScreen from './components/HomeScreen'
 import FileBrowser from './components/FileBrowser'
 import SendScreen from './components/SendScreen'
@@ -11,38 +11,77 @@ import ToastContainer, { showToast } from './components/ui/Toast'
 import appIcon from './assets/app-icon.png'
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('connection')
-  const [connected, setConnected] = useState(false)
+  const [screen, setScreen] = useState<Screen>('connections')
+  const [profiles, setProfiles] = useState<ConnectionProfile[]>([])
+  const [connectedIds, setConnectedIds] = useState<Set<string>>(new Set())
+  const [activeConnectionId, setActiveConnectionId] = useState<string | null>(null)
   const [progress, setProgress] = useState<TransferProgress | null>(null)
-  const [remoteUser, setRemoteUser] = useState('')
   const [autoConnecting, setAutoConnecting] = useState(true)
 
+  const activeProfile = useMemo(
+    () => profiles.find((p) => p.id === activeConnectionId) ?? null,
+    [profiles, activeConnectionId]
+  )
+  const remoteUser = activeProfile?.username ?? ''
+
+  // Progress listener — filter to active connection
   useEffect(() => {
-    const cleanup = window.electronAPI.sftp.onProgress((p) => {
-      setProgress(p)
+    const cleanup = window.electronAPI.sftp.onProgress((p: TransferProgress) => {
+      if (p.connectionId === activeConnectionId) {
+        setProgress(p)
+      }
     })
     return cleanup
-  }, [])
+  }, [activeConnectionId])
 
+  // Load profiles + auto-connect on mount
   useEffect(() => {
     (async () => {
       try {
-        const saved = await window.electronAPI.settings.get('connection')
-        // Only auto-connect with SSH key auth (password is not saved)
-        if (!saved?.host || !saved?.username || saved?.authType === 'password') {
-          setAutoConnecting(false)
-          return
+        let saved: ConnectionProfile[] | undefined = await window.electronAPI.settings.get('connectionProfiles')
+
+        // Migration from old single-connection settings
+        if (!saved || saved.length === 0) {
+          const oldConn = await window.electronAPI.settings.get('connection')
+          if (oldConn?.host && oldConn?.username) {
+            const migrated: ConnectionProfile = {
+              id: crypto.randomUUID(),
+              name: oldConn.host,
+              host: oldConn.host,
+              port: oldConn.port || 22,
+              username: oldConn.username,
+              authType: oldConn.authType || 'key',
+              privateKeyPath: oldConn.privateKeyPath,
+            }
+            saved = [migrated]
+            await window.electronAPI.settings.set('connectionProfiles', saved)
+          }
         }
-        const result = await window.electronAPI.ssh.connect(saved)
-        if (result.success) {
-          setConnected(true)
-          setRemoteUser(saved.username)
-          setScreen('home')
-        } else {
-          setScreen('connection')
+
+        if (saved && saved.length > 0) {
+          setProfiles(saved)
+
+          // Auto-connect SSH key profiles
+          for (const profile of saved) {
+            if (profile.authType === 'password') continue
+            const result = await window.electronAPI.ssh.connect(profile.id, {
+              host: profile.host,
+              port: profile.port,
+              username: profile.username,
+              authType: profile.authType,
+              privateKeyPath: profile.privateKeyPath,
+            })
+            if (result.success) {
+              setConnectedIds((prev) => new Set(prev).add(profile.id))
+              if (!activeConnectionId) {
+                setActiveConnectionId(profile.id)
+                setScreen('home')
+              }
+            }
+          }
         }
       } catch {
-        setScreen('connection')
+        // auto-connect failed
       } finally {
         setAutoConnecting(false)
       }
@@ -51,31 +90,62 @@ export default function App() {
 
   // Auto-reconnect on unexpected disconnect
   useEffect(() => {
-    const cleanup = window.electronAPI.ssh.onDisconnected(async () => {
-      setConnected(false)
-      showToast('info', 'Connection lost. Reconnecting...')
-      const result = await window.electronAPI.ssh.reconnect()
-      if (result.success) {
-        setConnected(true)
-        showToast('success', `Reconnected (attempt ${result.attempt})`)
+    const cleanup = window.electronAPI.ssh.onDisconnected(async (connectionId: string) => {
+      setConnectedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(connectionId)
+        return next
+      })
+
+      const profile = profiles.find((p) => p.id === connectionId)
+      const name = profile?.name || connectionId
+
+      if (connectionId === activeConnectionId) {
+        showToast('info', `"${name}" disconnected. Reconnecting...`)
+        const result = await window.electronAPI.ssh.reconnect(connectionId)
+        if (result.success) {
+          setConnectedIds((prev) => new Set(prev).add(connectionId))
+          showToast('success', `Reconnected to "${name}" (attempt ${result.attempt})`)
+        } else {
+          showToast('error', `Failed to reconnect to "${name}"`)
+        }
       } else {
-        showToast('error', 'Reconnect failed. Please reconnect manually.')
-        setScreen('connection')
+        showToast('info', `"${name}" disconnected`)
       }
     })
     return cleanup
-  }, [])
+  }, [activeConnectionId, profiles])
 
-  const handleConnected = useCallback((username: string) => {
-    setConnected(true)
-    setRemoteUser(username)
+  const handleConnect = useCallback((profile: ConnectionProfile) => {
+    setConnectedIds((prev) => new Set(prev).add(profile.id))
+    setActiveConnectionId(profile.id)
     setScreen('home')
   }, [])
 
-  const handleDisconnect = useCallback(async () => {
-    await window.electronAPI.ssh.disconnect()
-    setConnected(false)
-    setScreen('connection')
+  const handleDisconnect = useCallback(async (connectionId?: string) => {
+    const id = connectionId || activeConnectionId
+    if (!id) return
+    await window.electronAPI.ssh.disconnect(id)
+    setConnectedIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+    if (id === activeConnectionId) {
+      // Switch to next connected profile or go to connections
+      const remaining = [...connectedIds].filter((cid) => cid !== id)
+      if (remaining.length > 0) {
+        setActiveConnectionId(remaining[0])
+      } else {
+        setActiveConnectionId(null)
+        setScreen('connections')
+      }
+    }
+  }, [activeConnectionId, connectedIds])
+
+  const handleProfilesChange = useCallback((newProfiles: ConnectionProfile[]) => {
+    setProfiles(newProfiles)
+    window.electronAPI.settings.set('connectionProfiles', newProfiles)
   }, [])
 
   const navigate = useCallback((s: Screen) => setScreen(s), [])
@@ -84,10 +154,10 @@ export default function App() {
   const [dragging, setDragging] = useState(false)
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (!connected) return
+    if (!activeConnectionId || !connectedIds.has(activeConnectionId)) return
     e.preventDefault()
     setDragging(true)
-  }, [connected])
+  }, [activeConnectionId, connectedIds])
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     if (e.currentTarget === e.target) setDragging(false)
@@ -96,27 +166,33 @@ export default function App() {
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault()
     setDragging(false)
-    if (!connected || !remoteUser) return
+    if (!activeConnectionId || !remoteUser) return
 
     const files = Array.from(e.dataTransfer.files)
     if (files.length === 0) return
 
     const dest = `/Users/${remoteUser}/Desktop`
-    showToast('info', `Uploading ${files.length} file(s) to ${dest}...`)
+    showToast('info', `Uploading ${files.length} file(s)...`)
 
     let uploaded = 0
     for (const file of files) {
       try {
-        await window.electronAPI.sftp.upload(file.path, `${dest}/${file.name}`)
-        addHistory({ filename: file.name, direction: 'upload', success: true })
+        await window.electronAPI.sftp.upload(activeConnectionId, file.path, `${dest}/${file.name}`)
+        addHistory({ filename: file.name, direction: 'upload', success: true, connectionName: activeProfile?.name })
         uploaded++
       } catch (err: any) {
         showToast('error', `Failed to upload ${file.name}`)
-        addHistory({ filename: file.name, direction: 'upload', success: false, error: err.message })
+        addHistory({ filename: file.name, direction: 'upload', success: false, error: err.message, connectionName: activeProfile?.name })
       }
     }
-    if (uploaded > 0) showToast('success', `Uploaded ${uploaded} file(s) to Mac Mini Desktop`)
-  }, [connected, remoteUser])
+    if (uploaded > 0) showToast('success', `Uploaded ${uploaded} file(s)`)
+  }, [activeConnectionId, remoteUser, activeProfile])
+
+  // Connection switcher
+  const connectedProfiles = useMemo(
+    () => profiles.filter((p) => connectedIds.has(p.id)),
+    [profiles, connectedIds]
+  )
 
   return (
     <div
@@ -125,8 +201,8 @@ export default function App() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Title bar drag region */}
-      {screen !== 'connection' && (
+      {/* Title bar */}
+      {screen !== 'connections' && (
         <header className="drag-region h-12 flex items-center justify-between px-4 border-b border-mac-border shrink-0">
           <div className="flex items-center gap-2 pl-16">
             {screen !== 'home' && (
@@ -140,28 +216,49 @@ export default function App() {
             <span className="text-sm font-medium text-white">Secretary</span>
           </div>
           <div className="flex items-center gap-3 no-drag">
+            {/* Connection switcher */}
+            {connectedProfiles.length > 1 ? (
+              <select
+                value={activeConnectionId || ''}
+                onChange={(e) => setActiveConnectionId(e.target.value)}
+                className="bg-mac-input border border-mac-border rounded text-[11px] text-white px-2 py-1 focus:outline-none"
+              >
+                {connectedProfiles.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            ) : activeProfile ? (
+              <span className="text-[11px] text-mac-muted">{activeProfile.name}</span>
+            ) : null}
+
             <div className="flex items-center gap-1.5">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  connected ? 'bg-mac-success' : 'bg-mac-danger animate-pulse'
-                }`}
-              />
+              <span className={`w-2 h-2 rounded-full ${
+                activeConnectionId && connectedIds.has(activeConnectionId) ? 'bg-mac-success' : 'bg-mac-danger animate-pulse'
+              }`} />
               <span className="text-[11px] text-mac-muted">
-                {connected ? 'Connected' : 'Disconnected'}
+                {connectedIds.size > 0 ? `${connectedIds.size} connected` : 'Disconnected'}
               </span>
             </div>
             <button
               onClick={() => navigate('history')}
-              className="no-drag text-[11px] text-mac-muted hover:text-white transition-colors"
+              className="text-[11px] text-mac-muted hover:text-white transition-colors"
             >
               History
             </button>
             <button
-              onClick={handleDisconnect}
-              className="text-[11px] text-mac-muted hover:text-mac-danger transition-colors"
+              onClick={() => navigate('connections')}
+              className="text-[11px] text-mac-muted hover:text-white transition-colors"
             >
-              Disconnect
+              Connections
             </button>
+            {activeConnectionId && (
+              <button
+                onClick={() => handleDisconnect()}
+                className="text-[11px] text-mac-muted hover:text-mac-danger transition-colors"
+              >
+                Disconnect
+              </button>
+            )}
           </div>
         </header>
       )}
@@ -177,14 +274,31 @@ export default function App() {
             </div>
           </div>
         )}
-        {!autoConnecting && screen === 'connection' && <ConnectionScreen onConnected={handleConnected} />}
-        {screen === 'home' && <HomeScreen onNavigate={navigate} />}
-        {screen === 'browser' && <FileBrowser remoteUser={remoteUser} />}
-        {screen === 'send' && <SendScreen remoteUser={remoteUser} progress={progress} onClearProgress={() => setProgress(null)} />}
-        {screen === 'receive' && <ReceiveScreen remoteUser={remoteUser} progress={progress} onClearProgress={() => setProgress(null)} />}
-        {screen === 'status' && <StatusScreen />}
+        {!autoConnecting && screen === 'connections' && (
+          <ConnectionListScreen
+            profiles={profiles}
+            connectedIds={connectedIds}
+            onProfilesChange={handleProfilesChange}
+            onConnect={handleConnect}
+            onDisconnect={handleDisconnect}
+          />
+        )}
+        {screen === 'home' && <HomeScreen onNavigate={navigate} activeProfile={activeProfile} />}
+        {screen === 'browser' && activeConnectionId && (
+          <FileBrowser connectionId={activeConnectionId} remoteUser={remoteUser} />
+        )}
+        {screen === 'send' && activeConnectionId && (
+          <SendScreen connectionId={activeConnectionId} remoteUser={remoteUser} connectionName={activeProfile?.name} progress={progress} onClearProgress={() => setProgress(null)} />
+        )}
+        {screen === 'receive' && activeConnectionId && (
+          <ReceiveScreen connectionId={activeConnectionId} remoteUser={remoteUser} connectionName={activeProfile?.name} progress={progress} onClearProgress={() => setProgress(null)} />
+        )}
+        {screen === 'status' && activeConnectionId && (
+          <StatusScreen connectionId={activeConnectionId} />
+        )}
         {screen === 'history' && <HistoryScreen />}
       </main>
+
       {/* Drag overlay */}
       {dragging && (
         <div className="absolute inset-0 z-40 bg-mac-accent/10 border-2 border-dashed border-mac-accent rounded-lg flex items-center justify-center pointer-events-none">
@@ -193,7 +307,7 @@ export default function App() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
             </svg>
             <div className="text-sm font-semibold">Drop files to upload</div>
-            <div className="text-xs text-mac-muted mt-1">Files will be sent to Mac Mini Desktop</div>
+            <div className="text-xs text-mac-muted mt-1">Files will be sent to {activeProfile?.name || 'remote'} Desktop</div>
           </div>
         </div>
       )}

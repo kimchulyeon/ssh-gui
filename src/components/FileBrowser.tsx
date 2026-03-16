@@ -6,6 +6,7 @@ import { addHistory } from './HistoryScreen'
 import { formatSize, formatDate } from '../utils/format'
 
 interface Props {
+  connectionId: string
   remoteUser: string
 }
 
@@ -25,14 +26,14 @@ const DEFAULT_FAVORITES = (home: string): FavoriteItem[] => [
   { label: 'Documents', path: `${home}/Documents`, removable: false },
 ]
 
-export default function FileBrowser({ remoteUser }: Props) {
+export default function FileBrowser({ connectionId, remoteUser }: Props) {
   const homePath = `/Users/${remoteUser}`
   const [favorites, setFavorites] = useState<FavoriteItem[]>(() => DEFAULT_FAVORITES(homePath))
   const [favContextMenu, setFavContextMenu] = useState<{ x: number; y: number; fav: FavoriteItem } | null>(null)
 
   // Load saved favorites
   useEffect(() => {
-    window.electronAPI.settings.get('favorites').then((saved: FavoriteItem[] | undefined) => {
+    window.electronAPI.settings.get(`favorites:${connectionId}`).then((saved: FavoriteItem[] | undefined) => {
       if (saved && saved.length > 0) {
         setFavorites([...DEFAULT_FAVORITES(homePath), ...saved])
       }
@@ -42,7 +43,7 @@ export default function FileBrowser({ remoteUser }: Props) {
   // Save custom favorites
   const saveFavorites = useCallback((favs: FavoriteItem[]) => {
     const custom = favs.filter((f) => f.removable)
-    window.electronAPI.settings.set('favorites', custom)
+    window.electronAPI.settings.set(`favorites:${connectionId}`, custom)
   }, [])
 
   const addFavorite = useCallback((path: string) => {
@@ -87,7 +88,7 @@ export default function FileBrowser({ remoteUser }: Props) {
     setSearchResults(null)
     setSearchQuery('')
     try {
-      const result = await window.electronAPI.sftp.readdir(path)
+      const result = await window.electronAPI.sftp.readdir(connectionId, path)
       setFiles(result)
       setCurrentPath(path)
       setPathInput(path)
@@ -185,7 +186,7 @@ export default function FileBrowser({ remoteUser }: Props) {
     async () => {
       if (!deleteTarget) return
       try {
-        await window.electronAPI.sftp.delete(deleteTarget.path, deleteTarget.isDirectory)
+        await window.electronAPI.sftp.delete(connectionId, deleteTarget.path, deleteTarget.isDirectory)
         showToast('success', `Deleted "${deleteTarget.name}"`)
         loadDirectory(currentPath)
       } catch (err: any) {
@@ -214,7 +215,7 @@ export default function FileBrowser({ remoteUser }: Props) {
       }
       const dir = file.path.split('/').slice(0, -1).join('/')
       try {
-        await window.electronAPI.sftp.rename(file.path, `${dir}/${newName}`)
+        await window.electronAPI.sftp.rename(connectionId, file.path, `${dir}/${newName}`)
         setEditingName(null)
         loadDirectory(currentPath)
       } catch (err: any) {
@@ -228,7 +229,7 @@ export default function FileBrowser({ remoteUser }: Props) {
     const name = prompt('New folder name:')
     if (!name) return
     try {
-      await window.electronAPI.sftp.mkdir(`${currentPath}/${name}`)
+      await window.electronAPI.sftp.mkdir(connectionId, `${currentPath}/${name}`)
       loadDirectory(currentPath)
     } catch (err: any) {
       setError(err.message)
@@ -242,7 +243,7 @@ export default function FileBrowser({ remoteUser }: Props) {
       if (result.canceled || !result.filePaths[0]) return
       try {
         const localPath = `${result.filePaths[0]}/${file.name}`
-        await window.electronAPI.sftp.download(file.path, localPath)
+        await window.electronAPI.sftp.download(connectionId, file.path, localPath)
         showToast('success', `Downloaded "${file.name}"`)
         addHistory({ filename: file.name, direction: 'download', success: true })
       } catch (err: any) {
@@ -269,7 +270,7 @@ export default function FileBrowser({ remoteUser }: Props) {
     setError('')
     try {
       const cmd = `find ${currentPath} -maxdepth 5 -iname "*${searchQuery.trim()}*" -not -path "*/.*" 2>/dev/null | head -50`
-      const output = await window.electronAPI.ssh.exec(cmd)
+      const output = await window.electronAPI.ssh.exec(connectionId, cmd)
       const lines = output.trim().split('\n').filter(Boolean)
       const results: RemoteFile[] = lines.map((line) => {
         const name = line.split('/').pop() || line

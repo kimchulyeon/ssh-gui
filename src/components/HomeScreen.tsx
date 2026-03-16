@@ -1,7 +1,8 @@
-import type { Screen } from '../types'
+import type { Screen, ConnectionProfile } from '../types'
 
 interface Props {
   onNavigate: (screen: Screen) => void
+  activeProfile?: ConnectionProfile | null
 }
 
 const menuItems = [
@@ -51,9 +52,14 @@ const menuItems = [
   },
 ]
 
-export default function HomeScreen({ onNavigate }: Props) {
+export default function HomeScreen({ onNavigate, activeProfile }: Props) {
   return (
-    <div className="h-full flex items-center justify-center p-8">
+    <div className="h-full flex flex-col items-center justify-center p-8 gap-4">
+      {activeProfile && (
+        <div className="text-sm text-mac-muted">
+          Connected to <span className="text-white font-medium">{activeProfile.name}</span>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4 max-w-md w-full">
         {menuItems.map((item, i) => (
           <button

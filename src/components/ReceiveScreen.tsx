@@ -5,12 +5,14 @@ import { addHistory } from './HistoryScreen'
 import { formatSize } from '../utils/format'
 
 interface Props {
+  connectionId: string
   remoteUser: string
+  connectionName?: string
   progress: TransferProgress | null
   onClearProgress: () => void
 }
 
-export default function ReceiveScreen({ remoteUser, progress, onClearProgress }: Props) {
+export default function ReceiveScreen({ connectionId, remoteUser, connectionName, progress, onClearProgress }: Props) {
   const [remotePath, setRemotePath] = useState(`/Users/${remoteUser}`)
   const [files, setFiles] = useState<RemoteFile[]>([])
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set())
@@ -21,7 +23,7 @@ export default function ReceiveScreen({ remoteUser, progress, onClearProgress }:
 
   const loadFiles = useCallback(async (path: string) => {
     try {
-      const result = await window.electronAPI.sftp.readdir(path)
+      const result = await window.electronAPI.sftp.readdir(connectionId, path)
       setFiles(result)
       setRemotePath(path)
       setSelectedFiles(new Set())
@@ -61,15 +63,15 @@ export default function ReceiveScreen({ remoteUser, progress, onClearProgress }:
       for (const filePath of selectedFiles) {
         const fileName = filePath.split('/').pop() || filePath
         const dest = `${localPath}/${fileName}`
-        await window.electronAPI.sftp.download(filePath, dest)
-        addHistory({ filename: fileName, direction: 'download', success: true })
+        await window.electronAPI.sftp.download(connectionId, filePath, dest)
+        addHistory({ filename: fileName, direction: 'download', success: true, connectionName })
       }
       setDone(true)
       showToast('success', `Downloaded ${selectedFiles.size} file(s)`)
     } catch (err: any) {
       setError(err.message || 'Download failed')
       showToast('error', `Download failed: ${err.message}`)
-      addHistory({ filename: 'Download', direction: 'download', success: false, error: err.message })
+      addHistory({ filename: 'Download', direction: 'download', success: false, error: err.message, connectionName })
     } finally {
       setTransferring(false)
     }

@@ -5,7 +5,9 @@ import DuplicateDialog from './ui/DuplicateDialog'
 import { addHistory } from './HistoryScreen'
 
 interface Props {
+  connectionId: string
   remoteUser: string
+  connectionName?: string
   progress: TransferProgress | null
   onClearProgress: () => void
 }
@@ -16,9 +18,9 @@ interface SelectedFile {
   isDirectory: boolean
 }
 
-async function remoteExists(path: string): Promise<boolean> {
+async function remoteExists(connectionId: string, path: string): Promise<boolean> {
   try {
-    await window.electronAPI.sftp.stat(path)
+    await window.electronAPI.sftp.stat(connectionId, path)
     return true
   } catch {
     return false
@@ -31,7 +33,7 @@ function getRenamed(name: string): string {
   return `${name.slice(0, dot)} (copy)${name.slice(dot)}`
 }
 
-export default function SendScreen({ remoteUser, progress, onClearProgress }: Props) {
+export default function SendScreen({ connectionId, remoteUser, connectionName, progress, onClearProgress }: Props) {
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([])
   const [remotePath, setRemotePath] = useState(`/Users/${remoteUser}/Desktop`)
   const [transferring, setTransferring] = useState(false)
@@ -93,7 +95,7 @@ export default function SendScreen({ remoteUser, progress, onClearProgress }: Pr
       for (const file of selectedFiles) {
         let dest = `${remotePath}/${file.name}`
 
-        if (await remoteExists(dest)) {
+        if (await remoteExists(connectionId, dest)) {
           const action = await askDuplicateAction(file, dest)
           if (action === 'skip') continue
           if (action === 'rename') {
@@ -102,8 +104,8 @@ export default function SendScreen({ remoteUser, progress, onClearProgress }: Pr
           // 'overwrite' — just upload to same dest
         }
 
-        await window.electronAPI.sftp.upload(file.path, dest)
-        addHistory({ filename: file.name, direction: 'upload', success: true })
+        await window.electronAPI.sftp.upload(connectionId, file.path, dest)
+        addHistory({ filename: file.name, direction: 'upload', success: true, connectionName })
         sent++
       }
       setDone(true)
@@ -111,7 +113,7 @@ export default function SendScreen({ remoteUser, progress, onClearProgress }: Pr
     } catch (err: any) {
       setError(err.message || 'Transfer failed')
       showToast('error', `Send failed: ${err.message}`)
-      addHistory({ filename: 'Upload', direction: 'upload', success: false, error: err.message })
+      addHistory({ filename: 'Upload', direction: 'upload', success: false, error: err.message, connectionName })
     } finally {
       setTransferring(false)
     }
