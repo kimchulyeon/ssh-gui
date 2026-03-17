@@ -90,7 +90,12 @@ export default function App() {
 
   // Auto-reconnect on unexpected disconnect
   useEffect(() => {
+    const reconnectingIds = new Set<string>()
+
     const cleanup = window.electronAPI.ssh.onDisconnected(async (connectionId: string) => {
+      // Guard: skip if already handling reconnect for this connection
+      if (reconnectingIds.has(connectionId)) return
+
       setConnectedIds((prev) => {
         const next = new Set(prev)
         next.delete(connectionId)
@@ -101,13 +106,18 @@ export default function App() {
       const name = profile?.name || connectionId
 
       if (connectionId === activeConnectionId) {
+        reconnectingIds.add(connectionId)
         showToast('info', `"${name}" disconnected. Reconnecting...`)
-        const result = await window.electronAPI.ssh.reconnect(connectionId)
-        if (result.success) {
-          setConnectedIds((prev) => new Set(prev).add(connectionId))
-          showToast('success', `Reconnected to "${name}" (attempt ${result.attempt})`)
-        } else {
-          showToast('error', `Failed to reconnect to "${name}"`)
+        try {
+          const result = await window.electronAPI.ssh.reconnect(connectionId)
+          if (result.success) {
+            setConnectedIds((prev) => new Set(prev).add(connectionId))
+            showToast('success', `Reconnected to "${name}" (attempt ${result.attempt})`)
+          } else {
+            showToast('error', `Failed to reconnect to "${name}"`)
+          }
+        } finally {
+          reconnectingIds.delete(connectionId)
         }
       } else {
         showToast('info', `"${name}" disconnected`)

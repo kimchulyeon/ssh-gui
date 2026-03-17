@@ -113,31 +113,43 @@ ipcMain.handle('ssh:connect', async (_event, connectionId: string, config: {
   }
 })
 
+const reconnecting = new Set<string>()
+
 ipcMain.handle('ssh:reconnect', async (_event, connectionId: string) => {
+  if (reconnecting.has(connectionId)) return { success: false, error: 'Already reconnecting' }
   const conn = connections.get(connectionId)
   if (!conn) return { success: false, error: 'No saved connection' }
   const config = conn.config
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      conn.ssh.disconnect()
-      const ssh = new SSHConnection()
-      ssh.getClient().on('close', () => {
-        if (connections.has(connectionId)) {
-          mainWindow?.webContents.send('ssh:disconnected', connectionId)
-        }
-      })
-      await ssh.connect(config)
-      const sftp = new SFTPManager(ssh)
-      await sftp.init()
-      connections.set(connectionId, { ssh, sftp, config })
-      return { success: true, attempt }
-    } catch (err: any) {
-      if (attempt === 3) return { success: false, error: err.message }
-      await new Promise((r) => setTimeout(r, 2000))
+  reconnecting.add(connectionId)
+  try {
+    // Remove from map first to prevent close listener from firing during reconnect
+    connections.delete(connectionId)
+    conn.ssh.getClient().removeAllListeners('close')
+    conn.ssh.disconnect()
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const ssh = new SSHConnection()
+        ssh.getClient().on('close', () => {
+          if (connections.has(connectionId)) {
+            mainWindow?.webContents.send('ssh:disconnected', connectionId)
+          }
+        })
+        await ssh.connect(config)
+        const sftp = new SFTPManager(ssh)
+        await sftp.init()
+        connections.set(connectionId, { ssh, sftp, config })
+        return { success: true, attempt }
+      } catch (err: any) {
+        if (attempt === 3) return { success: false, error: err.message }
+        await new Promise((r) => setTimeout(r, 2000))
+      }
     }
+    return { success: false, error: 'Reconnect failed' }
+  } finally {
+    reconnecting.delete(connectionId)
   }
-  return { success: false, error: 'Reconnect failed' }
 })
 
 ipcMain.handle('ssh:disconnect', async (_event, connectionId: string) => {

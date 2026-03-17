@@ -9,7 +9,22 @@ export interface ToastMessage {
 let toastId = 0
 let listeners: Array<(msg: ToastMessage) => void> = []
 
+// Deduplication: track recent toasts to prevent spam
+const recentToasts = new Map<string, number>()
+const DEDUP_INTERVAL = 3000
+
 export function showToast(type: ToastMessage['type'], text: string) {
+  const key = `${type}:${text}`
+  const now = Date.now()
+  const lastShown = recentToasts.get(key)
+  if (lastShown && now - lastShown < DEDUP_INTERVAL) return
+
+  recentToasts.set(key, now)
+  // Clean old entries
+  for (const [k, t] of recentToasts) {
+    if (now - t > DEDUP_INTERVAL) recentToasts.delete(k)
+  }
+
   const msg: ToastMessage = { id: ++toastId, type, text }
   listeners.forEach((fn) => fn(msg))
 }
